@@ -1,8 +1,9 @@
-
 #include <boost/dynamic_bitset.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <openssl/err.h>
+#include <openssl/evp.h>
 #include <vector>
 
 const char b64Tbl[] =
@@ -21,7 +22,7 @@ void dump(const char *msg, T *data, uint32_t len, char sep = NULL) {
 }
 template <typename T> void dumph(T *data, uint32_t len, char sep = NULL) {
   for (int i = 0; i < len; i++)
-    printf("%hx%c", data[i], sep);
+    printf("%hhx%c", data[i], sep);
   std::cout << std::endl;
 }
 template <typename T>
@@ -114,6 +115,14 @@ public:
     }
     return res;
   }
+  static std::vector<uint8_t> decDat(const uint8_t *s, uint32_t sLen) {
+    std::vector<uint8_t> res;
+    for (int i = 0; i < sLen; i += 2) {
+      res.push_back((Decoding::decC(s[i]) << 4) + Decoding::decC(s[i + 1]));
+    }
+    return res;
+  }
+
   static uint8_t getIdxForB64(unsigned char c) {
     char res = 0xff;
     for (int i = 0; i < b64Len; i++) {
@@ -325,3 +334,44 @@ std::vector<std::vector<uint8_t>> segmentVec(const std::vector<uint8_t> vec,
   }
   return blocks;
 }
+
+namespace Crypt {
+
+#define HANDLE_OPENSSL_ERR_RET                                                 \
+  ERR_print_errors_fp(stderr);                                                 \
+  return -1
+
+int decrypt_AES_128_ECB(const unsigned char *cText, uint32_t cTxtLen,
+                        const unsigned char *key, uint32_t klen,
+                        unsigned char *const plain) {
+  EVP_CIPHER_CTX *ctx;
+  uint32_t len = -1, ptLen = -1;
+
+  // Get ctx
+  if (!(ctx = EVP_CIPHER_CTX_new())) {
+    HANDLE_OPENSSL_ERR_RET;
+  }
+
+  // ECB has no IV obv
+  if (EVP_DecryptInit_ex(ctx, EVP_aes_128_ecb(), NULL, key, NULL) != 1) {
+    HANDLE_OPENSSL_ERR_RET;
+  }
+
+  if (EVP_DecryptUpdate(ctx, plain, (int *)&len, cText, cTxtLen) != 1) {
+    HANDLE_OPENSSL_ERR_RET;
+  }
+
+  ptLen = len;
+
+  if (EVP_CipherFinal_ex(ctx, plain + len, (int *)&len) != 1) {
+    HANDLE_OPENSSL_ERR_RET;
+  }
+
+  ptLen += len;
+
+  // Be nice
+  EVP_CIPHER_CTX_free(ctx);
+
+  return len;
+}
+} // namespace Crypt
